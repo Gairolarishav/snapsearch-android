@@ -1,0 +1,24 @@
+# Android/Gradle ignores
+.gradle/
+/build/
+app/build/
+*.iml
+.idea/
+local.properties
+*.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Kotlin
+*.class
+
+# Gradle cache
+.gradle
+
+# ONNX model files (large binaries — tracked via LFS or downloaded separately)
+# *.onnx
