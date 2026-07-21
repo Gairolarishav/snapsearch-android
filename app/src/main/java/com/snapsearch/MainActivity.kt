@@ -16,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -66,6 +67,8 @@ fun DebugScreen(modifier: Modifier = Modifier) {
     var ocrStatus by remember { mutableStateOf("Pick an image to test OCR") }
     var clipStatus by remember { mutableStateOf("Pick an image to test ClipEngine") }
     var clipTextStatus by remember { mutableStateOf("Tap to test ClipEngine text tower") }
+    var crossModalStatus by remember { mutableStateOf("Pick a real photo to test cross-modal search") }
+    var customCandidate by remember { mutableStateOf("") }
     var selectedUri by remember { mutableStateOf<Uri?>(null) }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
@@ -87,6 +90,17 @@ fun DebugScreen(modifier: Modifier = Modifier) {
             clipStatus = "Embedding: ${uri.lastPathSegment}..."
             scope.launch {
                 clipStatus = runClipImageEmbed(context, uri)
+            }
+        }
+    }
+
+    val crossModalImagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            crossModalStatus = "Embedding image + candidate strings..."
+            scope.launch {
+                crossModalStatus = runCrossModalSanityCheck(context, uri, customCandidate)
             }
         }
     }
@@ -141,6 +155,23 @@ fun DebugScreen(modifier: Modifier = Modifier) {
             scope.launch { clipTextStatus = runClipTextEmbed(context) }
         }) {
             Text("Embed Hardcoded Test String")
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+        // --- Cross-modal sanity check section ---
+        Text("Phase 1.5 — Cross-modal sanity check", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        OutlinedTextField(
+            value = customCandidate,
+            onValueChange = { customCandidate = it },
+            label = { Text("What is the photo actually of? (optional, adds a matching candidate)") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(crossModalStatus, modifier = Modifier.fillMaxWidth())
+        Button(onClick = {
+            crossModalImagePickerLauncher.launch("image/*")
+        }) {
+            Text("Pick Real Photo to Rank Against Candidates")
         }
     }
 }
@@ -264,4 +295,62 @@ private suspend fun runClipTextEmbed(context: android.content.Context): String {
             "❌ ClipEngine text tower FAIL: ${e.javaClass.simpleName}: ${e.message}"
         }
     }
+}
+
+// ---- Cross-modal sanity check (Phase 1.5) ----
+
+// Deliberately broad, mutually exclusive categories so a real photo should score clearly
+// higher against its actual category than against the others — this is the real
+// correctness gate for the shared image/text embedding space, not just "code runs".
+// A tester-supplied custom candidate (the photo's real content) is folded in at run time,
+// since a fixed generic label set can't cover every real photo in someone's library.
+private val CROSS_MODAL_CANDIDATE_LABELS = listOf(
+    "a handwritten note on paper",
+    "a screenshot of a phone app",
+    "a photo of a person",
+    "a photo of nature or outdoors"
+)
+
+private suspend fun runCrossModalSanityCheck(context: android.content.Context, uri: Uri, customCandidate: String): String {
+    return withContext(Dispatchers.Default) {
+        try {
+            val startMs = System.currentTimeMillis()
+            val imageEmbedding = ClipEngine.embedImage(context, uri)
+            val candidates = if (customCandidate.isBlank()) {
+                CROSS_MODAL_CANDIDATE_LABELS
+            } else {
+                listOf(customCandidate.trim()) + CROSS_MODAL_CANDIDATE_LABELS
+            }
+            val scored = candidates.map { label ->
+                val textEmbedding = ClipEngine.embedText(context, label)
+                val similarity = dotProduct(imageEmbedding, textEmbedding)
+                label to similarity
+            }.sortedByDescending { it.second }
+            val elapsed = System.currentTimeMillis() - startMs
+
+            val topScore = scored.first().second
+            val runnerUpScore = scored.getOrNull(1)?.second ?: Float.NEGATIVE_INFINITY
+            val margin = topScore - runnerUpScore
+
+            buildString {
+                appendLine("Embedded image + ${candidates.size} candidates in ${elapsed}ms")
+                appendLine("Top match: \"${scored.first().first}\" (margin over runner-up: ${"%.3f".format(margin)})")
+                appendLine("--- Ranked cosine similarity ---")
+                scored.forEach { (label, score) ->
+                    appendLine("${"%.4f".format(score)}  \"$label\"")
+                }
+                appendLine()
+                appendLine("Judge by eye: does the top match fit the picked photo?")
+            }
+        } catch (e: Exception) {
+            "❌ Cross-modal check FAIL: ${e.javaClass.simpleName}: ${e.message}"
+        }
+    }
+}
+
+/** Dot product of two already-L2-normalized vectors = cosine similarity. */
+private fun dotProduct(a: FloatArray, b: FloatArray): Float {
+    var sum = 0f
+    for (i in a.indices) sum += a[i] * b[i]
+    return sum
 }
