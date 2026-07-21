@@ -65,6 +65,7 @@ fun DebugScreen(modifier: Modifier = Modifier) {
     var objectBoxStatus by remember { mutableStateOf("Tap to test ObjectBox") }
     var ocrStatus by remember { mutableStateOf("Pick an image to test OCR") }
     var clipStatus by remember { mutableStateOf("Pick an image to test ClipEngine") }
+    var clipTextStatus by remember { mutableStateOf("Tap to test ClipEngine text tower") }
     var selectedUri by remember { mutableStateOf<Uri?>(null) }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
@@ -128,6 +129,18 @@ fun DebugScreen(modifier: Modifier = Modifier) {
             clipImagePickerLauncher.launch("image/*")
         }) {
             Text("Pick Image to Embed")
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+        // --- ClipEngine text tower test section ---
+        Text("Phase 1.4 — ClipEngine (text tower)", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        Text(clipTextStatus, modifier = Modifier.fillMaxWidth())
+        Button(onClick = {
+            clipTextStatus = "Embedding: \"$CLIP_TEXT_DEBUG_STRING\"..."
+            scope.launch { clipTextStatus = runClipTextEmbed(context) }
+        }) {
+            Text("Embed Hardcoded Test String")
         }
     }
 }
@@ -223,6 +236,32 @@ private suspend fun runClipImageEmbed(context: android.content.Context, uri: Uri
             }
         } catch (e: Exception) {
             "❌ ClipEngine FAIL: ${e.javaClass.simpleName}: ${e.message}"
+        }
+    }
+}
+
+// ---- ClipEngine text tower test (Phase 1.4) ----
+
+private const val CLIP_TEXT_DEBUG_STRING = "a photo of a cat"
+
+private suspend fun runClipTextEmbed(context: android.content.Context): String {
+    return withContext(Dispatchers.Default) {
+        try {
+            val startMs = System.currentTimeMillis()
+            val embedding = ClipEngine.embedText(context, CLIP_TEXT_DEBUG_STRING)
+            val elapsed = System.currentTimeMillis() - startMs
+
+            val hasNaN = embedding.any { it.isNaN() || it.isInfinite() }
+            val norm = kotlin.math.sqrt(embedding.sumOf { (it.toDouble() * it.toDouble()) })
+
+            buildString {
+                appendLine(if (!hasNaN) "✅ Embedded \"$CLIP_TEXT_DEBUG_STRING\" in ${elapsed}ms" else "❌ FAIL: NaN/Inf in output")
+                appendLine("Dimensions: ${embedding.size}")
+                appendLine("L2 norm: $norm (expect ~1.0)")
+                appendLine("First 5 values: ${embedding.take(5)}")
+            }
+        } catch (e: Exception) {
+            "❌ ClipEngine text tower FAIL: ${e.javaClass.simpleName}: ${e.message}"
         }
     }
 }
