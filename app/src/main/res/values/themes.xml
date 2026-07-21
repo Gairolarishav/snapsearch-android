@@ -1,4 +1,5 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Theme.SnapSearch" parent="Theme.Material3.DayNight.NoActionBar" />
+    <!-- Base application theme — Compose handles Material3 theming;
+         this just provides a basic window theme for the Activity. -->
+    <style name="Theme.SnapSearch" parent="android:Theme.Material.Light.NoActionBar" />
 </resources>
