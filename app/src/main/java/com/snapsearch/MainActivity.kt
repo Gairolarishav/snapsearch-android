@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import com.snapsearch.data.ImageEntity
 import com.snapsearch.data.ImageEntity_
 import com.snapsearch.data.ObjectBoxStore
+import com.snapsearch.ml.ClipEngine
 import com.snapsearch.ml.OcrEngine
 import com.snapsearch.ui.theme.SnapSearchTheme
 import kotlinx.coroutines.Dispatchers
@@ -63,6 +64,7 @@ fun DebugScreen(modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     var objectBoxStatus by remember { mutableStateOf("Tap to test ObjectBox") }
     var ocrStatus by remember { mutableStateOf("Pick an image to test OCR") }
+    var clipStatus by remember { mutableStateOf("Pick an image to test ClipEngine") }
     var selectedUri by remember { mutableStateOf<Uri?>(null) }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
@@ -73,6 +75,17 @@ fun DebugScreen(modifier: Modifier = Modifier) {
             ocrStatus = "Running OCR on: ${uri.lastPathSegment}..."
             scope.launch {
                 ocrStatus = runOcr(context, uri)
+            }
+        }
+    }
+
+    val clipImagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            clipStatus = "Embedding: ${uri.lastPathSegment}..."
+            scope.launch {
+                clipStatus = runClipImageEmbed(context, uri)
             }
         }
     }
@@ -104,6 +117,17 @@ fun DebugScreen(modifier: Modifier = Modifier) {
             imagePickerLauncher.launch("image/*")
         }) {
             Text("Pick Image for OCR")
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+        // --- ClipEngine image tower test section ---
+        Text("Phase 1.3 — ClipEngine (image tower)", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        Text(clipStatus, modifier = Modifier.fillMaxWidth())
+        Button(onClick = {
+            clipImagePickerLauncher.launch("image/*")
+        }) {
+            Text("Pick Image to Embed")
         }
     }
 }
@@ -175,6 +199,30 @@ private suspend fun runOcr(context: android.content.Context, uri: Uri): String {
             }
         } catch (e: Exception) {
             "❌ OCR FAIL: ${e.javaClass.simpleName}: ${e.message}"
+        }
+    }
+}
+
+// ---- ClipEngine image tower test (Phase 1.3) ----
+
+private suspend fun runClipImageEmbed(context: android.content.Context, uri: Uri): String {
+    return withContext(Dispatchers.Default) {
+        try {
+            val startMs = System.currentTimeMillis()
+            val embedding = ClipEngine.embedImage(context, uri)
+            val elapsed = System.currentTimeMillis() - startMs
+
+            val hasNaN = embedding.any { it.isNaN() || it.isInfinite() }
+            val norm = kotlin.math.sqrt(embedding.sumOf { (it.toDouble() * it.toDouble()) })
+
+            buildString {
+                appendLine(if (!hasNaN) "✅ Embedded in ${elapsed}ms" else "❌ FAIL: NaN/Inf in output")
+                appendLine("Dimensions: ${embedding.size}")
+                appendLine("L2 norm: $norm (expect ~1.0)")
+                appendLine("First 5 values: ${embedding.take(5)}")
+            }
+        } catch (e: Exception) {
+            "❌ ClipEngine FAIL: ${e.javaClass.simpleName}: ${e.message}"
         }
     }
 }
