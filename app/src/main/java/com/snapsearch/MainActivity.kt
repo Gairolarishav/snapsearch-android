@@ -34,8 +34,10 @@ import androidx.compose.ui.unit.sp
 import com.snapsearch.data.ImageEntity
 import com.snapsearch.data.ImageEntity_
 import com.snapsearch.data.ObjectBoxStore
+import com.snapsearch.indexing.IndexingPipeline
 import com.snapsearch.ml.ClipEngine
 import com.snapsearch.ml.OcrEngine
+import com.snapsearch.search.ScoreFusion
 import com.snapsearch.ui.theme.SnapSearchTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -70,6 +72,9 @@ fun DebugScreen(modifier: Modifier = Modifier) {
     var crossModalStatus by remember { mutableStateOf("Pick a real photo to test cross-modal search") }
     var customCandidate by remember { mutableStateOf("") }
     var selectedUri by remember { mutableStateOf<Uri?>(null) }
+    var indexingStatus by remember { mutableStateOf("Pick 10-20 real on-device images to index") }
+    var searchQuery by remember { mutableStateOf("") }
+    var searchStatus by remember { mutableStateOf("Index some images above, then search") }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -101,6 +106,17 @@ fun DebugScreen(modifier: Modifier = Modifier) {
             crossModalStatus = "Embedding image + candidate strings..."
             scope.launch {
                 crossModalStatus = runCrossModalSanityCheck(context, uri, customCandidate)
+            }
+        }
+    }
+
+    val indexPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            indexingStatus = "Indexing 0/${uris.size}..."
+            scope.launch {
+                indexingStatus = runIndexing(context, uris) { progress -> indexingStatus = progress }
             }
         }
     }
@@ -172,6 +188,30 @@ fun DebugScreen(modifier: Modifier = Modifier) {
             crossModalImagePickerLauncher.launch("image/*")
         }) {
             Text("Pick Real Photo to Rank Against Candidates")
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+        // --- ScoreFusion + IndexingPipeline end-to-end search section ---
+        Text("Phase 1.6 — Search (IndexingPipeline + ScoreFusion)", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        Text(indexingStatus, modifier = Modifier.fillMaxWidth())
+        Button(onClick = {
+            indexPickerLauncher.launch("image/*")
+        }) {
+            Text("Pick Images to Index (10-20)")
+        }
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            label = { Text("Search query, e.g. \"error message\" or \"receipt\"") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(searchStatus, modifier = Modifier.fillMaxWidth())
+        Button(onClick = {
+            searchStatus = "Searching..."
+            scope.launch { searchStatus = runSearch(context, searchQuery) }
+        }) {
+            Text("Search Indexed Images")
         }
     }
 }
@@ -353,4 +393,54 @@ private fun dotProduct(a: FloatArray, b: FloatArray): Float {
     var sum = 0f
     for (i in a.indices) sum += a[i] * b[i]
     return sum
+}
+
+// ---- IndexingPipeline + ScoreFusion end-to-end search (Phase 1.6) ----
+
+private suspend fun runIndexing(
+    context: android.content.Context,
+    uris: List<Uri>,
+    onProgress: (String) -> Unit
+): String {
+    var successCount = 0
+    val log = StringBuilder()
+    uris.forEachIndexed { i, uri ->
+        onProgress("Indexing ${i + 1}/${uris.size}: ${uri.lastPathSegment}...")
+        try {
+            IndexingPipeline.indexImage(context, uri)
+            successCount++
+            log.appendLine("✅ ${uri.lastPathSegment}")
+        } catch (e: Exception) {
+            log.appendLine("❌ ${uri.lastPathSegment}: ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+    return buildString {
+        appendLine("Indexed $successCount/${uris.size} image(s)")
+        append(log)
+    }
+}
+
+private suspend fun runSearch(context: android.content.Context, query: String): String {
+    if (query.isBlank()) return "⚠️ Type a query first"
+    return try {
+        val startMs = System.currentTimeMillis()
+        val results = ScoreFusion.search(context, query)
+        val elapsed = System.currentTimeMillis() - startMs
+
+        if (results.isEmpty()) {
+            "⚠️ No candidates (index some images first) — searched in ${elapsed}ms"
+        } else {
+            buildString {
+                appendLine("✅ ${results.size} candidate(s) in ${elapsed}ms for \"$query\"")
+                appendLine("--- Ranked results (top 10) ---")
+                results.take(10).forEach { r ->
+                    val imgScore = r.imageSimilarity?.let { "%.3f".format(it) } ?: "—"
+                    val txtScore = r.textSimilarity?.let { "%.3f".format(it) } ?: "—"
+                    appendLine("${"%.4f".format(r.fusedScore)}  ${r.entity.uri.substringAfterLast('/')}  (img=$imgScore, txt=$txtScore)")
+                }
+            }
+        }
+    } catch (e: Exception) {
+        "❌ Search FAIL: ${e.javaClass.simpleName}: ${e.message}"
+    }
 }
