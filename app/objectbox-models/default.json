@@ -1,0 +1,73 @@
+{
+  "_note1": "KEEP THIS FILE! Check it into a version control system (VCS) like git.",
+  "_note2": "ObjectBox manages crucial IDs for your object model. See docs for details.",
+  "_note3": "If you have VCS merge conflicts, you must resolve them according to ObjectBox docs.",
+  "entities": [
+    {
+      "id": "1:7663598038195446441",
+      "lastPropertyId": "8:670515955911690468",
+      "name": "ImageEntity",
+      "properties": [
+        {
+          "id": "1:3361918943958629313",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:212724184599957863",
+          "name": "uri",
+          "indexId": "1:6136461552936566432",
+          "type": 9,
+          "flags": 2048
+        },
+        {
+          "id": "3:2537926996726276955",
+          "name": "indexedAtMillis",
+          "type": 6
+        },
+        {
+          "id": "4:8271948037973871011",
+          "name": "ocrText",
+          "type": 9
+        },
+        {
+          "id": "5:5567788090066540631",
+          "name": "captionSource",
+          "type": 9
+        },
+        {
+          "id": "6:1901395101489011002",
+          "name": "captionText",
+          "type": 9
+        },
+        {
+          "id": "7:7222477841163790302",
+          "name": "imageEmbedding",
+          "indexId": "2:7644627341306169241",
+          "type": 28,
+          "flags": 8
+        },
+        {
+          "id": "8:670515955911690468",
+          "name": "textEmbedding",
+          "indexId": "3:4151341237361337822",
+          "type": 28,
+          "flags": 8
+        }
+      ],
+      "relations": []
+    }
+  ],
+  "lastEntityId": "1:7663598038195446441",
+  "lastIndexId": "3:4151341237361337822",
+  "lastRelationId": "0:0",
+  "lastSequenceId": "0:0",
+  "modelVersion": 5,
+  "modelVersionParserMinimum": 5,
+  "retiredEntityUids": [],
+  "retiredIndexUids": [],
+  "retiredPropertyUids": [],
+  "retiredRelationUids": [],
+  "version": 1
+}
