@@ -2,7 +2,8 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.ksp)
+    alias(libs.plugins.kotlin.kapt)
+    alias(libs.plugins.objectbox)
 }
 
 android {
@@ -77,10 +78,12 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.navigation.compose)
 
-    // Room database (images + embedding BLOBs)
-    implementation(libs.androidx.room.runtime)
-    implementation(libs.androidx.room.ktx)
-    ksp(libs.androidx.room.compiler)
+    // ObjectBox — on-device database with a built-in HNSW vector index (ANN search)
+    // for image/text embeddings + metadata. Debug builds get the Admin data browser
+    // for inspecting stored entities during development; release builds skip it to
+    // keep installed size down.
+    debugImplementation(libs.objectbox.android.admin)
+    releaseImplementation(libs.objectbox.android)
 
     // Background indexing
     implementation(libs.androidx.work.runtime.ktx)

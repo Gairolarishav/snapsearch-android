@@ -30,9 +30,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.snapsearch.data.FloatArrayConverter
 import com.snapsearch.data.ImageEntity
-import com.snapsearch.data.SnapSearchDatabase
+import com.snapsearch.data.ImageEntity_
+import com.snapsearch.data.ObjectBoxStore
 import com.snapsearch.ml.OcrEngine
 import com.snapsearch.ui.theme.SnapSearchTheme
 import kotlinx.coroutines.Dispatchers
@@ -55,13 +55,13 @@ class MainActivity : ComponentActivity() {
 
 /**
  * Throwaway debug UI for Phase 1.1 + 1.2 verification.
- * Tests Room insert/read and OCR on a user-selected image.
+ * Tests ObjectBox insert/read/nearest-neighbor search and OCR on a user-selected image.
  */
 @Composable
 fun DebugScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var roomStatus by remember { mutableStateOf("Tap to test Room DB") }
+    var objectBoxStatus by remember { mutableStateOf("Tap to test ObjectBox") }
     var ocrStatus by remember { mutableStateOf("Pick an image to test OCR") }
     var selectedUri by remember { mutableStateOf<Uri?>(null) }
 
@@ -85,14 +85,14 @@ fun DebugScreen(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // --- Room test section ---
-        Text("Phase 1.1 — Room", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-        Text(roomStatus, modifier = Modifier.fillMaxWidth())
+        // --- ObjectBox test section ---
+        Text("Phase 1.1 — ObjectBox", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        Text(objectBoxStatus, modifier = Modifier.fillMaxWidth())
         Button(onClick = {
-            roomStatus = "Testing..."
-            scope.launch { roomStatus = testRoomInsertAndRead(context) }
+            objectBoxStatus = "Testing..."
+            scope.launch { objectBoxStatus = testObjectBoxInsertAndSearch(context) }
         }) {
-            Text("Test Room Insert + Read")
+            Text("Test ObjectBox Insert + Nearest-Neighbor Search")
         }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -108,41 +108,45 @@ fun DebugScreen(modifier: Modifier = Modifier) {
     }
 }
 
-// ---- Room test (from Phase 1.1) ----
+// ---- ObjectBox test (Phase 1.1, migrated from Room) ----
 
-private suspend fun testRoomInsertAndRead(context: android.content.Context): String {
+private suspend fun testObjectBoxInsertAndSearch(context: android.content.Context): String {
     return withContext(Dispatchers.IO) {
         try {
-            val db = SnapSearchDatabase.get(context)
-            val dao = db.imageDao()
+            val box = ObjectBoxStore.imageBox(context)
+            val testUri = "content://test/dummy_image_001"
 
-            val dummyEmbedding = FloatArray(4) { it.toFloat() }
-            val dummyBytes = FloatArrayConverter().fromFloatArray(dummyEmbedding)
+            // Distinct, non-trivial dummy vector so a nearest-neighbor match is meaningful,
+            // not just "the only row in the table".
+            val dummyEmbedding = FloatArray(ImageEntity.CLIP_EMBEDDING_DIMENSIONS.toInt()) { i -> i.toFloat() }
 
             val entity = ImageEntity(
-                uri = "content://test/dummy_image_001",
+                uri = testUri,
                 indexedAtMillis = System.currentTimeMillis(),
-                ocrText = "Hello Room test",
+                ocrText = "Hello ObjectBox test",
                 captionSource = "clip_tags",
                 captionText = "test debug",
-                imageEmbedding = dummyBytes,
-                textEmbedding = dummyBytes
+                imageEmbedding = dummyEmbedding,
+                textEmbedding = dummyEmbedding
             )
+            box.put(entity)
 
-            dao.upsert(entity)
-            val count = dao.count()
-            val readBack = dao.getAll().find { it.uri == "content://test/dummy_image_001" }
+            val count = box.count()
+            val readBack = box.query(ImageEntity_.uri.equal(testUri)).build().findFirst()
+                ?: return@withContext "❌ FAIL: inserted but could not read back by uri"
 
-            if (readBack == null) return@withContext "❌ FAIL: inserted but could not read back"
+            val embeddingMatch = readBack.imageEmbedding?.contentEquals(dummyEmbedding) == true
 
-            val recoveredEmbedding = FloatArrayConverter().toFloatArray(readBack.imageEmbedding)
-            val embeddingMatch = recoveredEmbedding.contentEquals(dummyEmbedding)
+            val nnQuery = box.query(ImageEntity_.imageEmbedding.nearestNeighbors(dummyEmbedding, 5)).build()
+            val nnResults = nnQuery.findWithScores()
+            val topMatchIsSelf = nnResults.firstOrNull()?.get()?.uri == testUri
 
             buildString {
-                appendLine("✅ PASS — Room works!")
+                appendLine("✅ PASS — ObjectBox works!")
                 appendLine("Count: $count")
                 appendLine("URI: ${readBack.uri}")
                 appendLine("Embedding round-trip: ${if (embeddingMatch) "✅" else "❌"}")
+                appendLine("Nearest-neighbor self-match: ${if (topMatchIsSelf) "✅" else "❌"} (top score: ${nnResults.firstOrNull()?.score})")
             }
         } catch (e: Exception) {
             "❌ FAIL: ${e.javaClass.simpleName}: ${e.message}"
