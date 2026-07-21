@@ -94,6 +94,9 @@ dependencies {
     // ML Kit Text Recognition v2 (bundled Latin model)
     implementation(libs.mlkit.text.recognition)
 
+    // Coroutine bridge for ML Kit's Task API
+    implementation(libs.kotlinx.coroutines.play.services)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
