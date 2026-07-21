@@ -33,9 +33,8 @@ data class ImageEntity(
     var textEmbedding: FloatArray? = null
 ) {
     companion object {
-        // Placeholder — confirm the real MobileCLIP embedding dimension when ClipEngine is
-        // built (Phase 1.3) from the model's own metadata, then update this constant and
-        // re-verify the HNSW index still matches the actual model output shape.
+        // Confirmed against the real MobileCLIP S0 (Xenova/mobileclip_s0) ONNX graph's
+        // image_embeds/text_embeds output shape during Phase 1.3 — not assumed.
         // Long, not Int — @HnswIndex's `dimensions` parameter requires it.
         const val CLIP_EMBEDDING_DIMENSIONS: Long = 512L
     }
