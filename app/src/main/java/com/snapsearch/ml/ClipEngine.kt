@@ -12,14 +12,16 @@ import ai.onnxruntime.OrtSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.FloatBuffer
+import java.nio.LongBuffer
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
- * MobileCLIP S0 (int8, ONNX) image tower — asset-bundled model, source:
+ * MobileCLIP S0 (int8, ONNX) image + text towers — asset-bundled model, source:
  * Xenova/mobileclip_s0 on Hugging Face (ONNX port of Apple's MobileCLIP-S0,
- * see assets/mobileclip/LICENSE.txt). Text tower (Phase 1.4) will live in
- * this same object once the CLIP tokenizer is ported.
+ * see assets/mobileclip/LICENSE.txt). Text tower tokenization is handled by
+ * [ClipTokenizer] (CLIP byte-level BPE, ported from the same HF repo's
+ * tokenizer.json).
  *
  * Preprocessing (resize shortest edge to 256, center crop 256x256, scale to
  * [0,1] with no mean/std normalization) and the 512-dim output size were
@@ -27,16 +29,22 @@ import kotlin.math.sqrt
  * graph, not assumed — the vision model feeds pixel_values straight into a
  * quantize node with no normalization op ahead of it, and the projection
  * head has no L2-normalize op after it, so normalization is our job here.
+ * The text model takes a single `input_ids` int64 input (no attention_mask)
+ * and likewise has no in-graph L2-normalize step, confirmed from its ONNX graph.
  */
 object ClipEngine {
 
     private const val VISION_MODEL_ASSET = "mobileclip/vision_model_int8.onnx"
+    private const val TEXT_MODEL_ASSET = "mobileclip/text_model_int8.onnx"
     private const val IMAGE_SIZE = 256
 
     private val env: OrtEnvironment by lazy { OrtEnvironment.getEnvironment() }
 
     @Volatile
     private var loadedVisionSession: OrtSession? = null
+
+    @Volatile
+    private var loadedTextSession: OrtSession? = null
 
     private fun loadVisionSession(context: Context): OrtSession {
         loadedVisionSession?.let { return it }
@@ -47,6 +55,19 @@ object ClipEngine {
             options.addXnnpack(emptyMap())
             val session = env.createSession(modelBytes, options)
             loadedVisionSession = session
+            return session
+        }
+    }
+
+    private fun loadTextSession(context: Context): OrtSession {
+        loadedTextSession?.let { return it }
+        synchronized(this) {
+            loadedTextSession?.let { return it }
+            val modelBytes = context.assets.open(TEXT_MODEL_ASSET).use { it.readBytes() }
+            val options = OrtSession.SessionOptions()
+            options.addXnnpack(emptyMap())
+            val session = env.createSession(modelBytes, options)
+            loadedTextSession = session
             return session
         }
     }
@@ -63,6 +84,23 @@ object ClipEngine {
         val session = loadVisionSession(context)
         OnnxTensor.createTensor(env, FloatBuffer.wrap(input), longArrayOf(1, 3, IMAGE_SIZE.toLong(), IMAGE_SIZE.toLong())).use { tensor ->
             session.run(mapOf("pixel_values" to tensor)).use { result ->
+                @Suppress("UNCHECKED_CAST")
+                val output = (result[0].value as Array<FloatArray>)[0]
+                l2Normalize(output)
+            }
+        }
+    }
+
+    /**
+     * Embed one text string into MobileCLIP's 512-dim joint embedding space —
+     * used for search queries, OCR text, and zero-shot tag labels alike.
+     * Returns an L2-normalized FloatArray, ready to store/compare directly.
+     */
+    suspend fun embedText(context: Context, text: String): FloatArray = withContext(Dispatchers.Default) {
+        val inputIds = ClipTokenizer.tokenize(context, text)
+        val session = loadTextSession(context)
+        OnnxTensor.createTensor(env, LongBuffer.wrap(inputIds), longArrayOf(1, inputIds.size.toLong())).use { tensor ->
+            session.run(mapOf("input_ids" to tensor)).use { result ->
                 @Suppress("UNCHECKED_CAST")
                 val output = (result[0].value as Array<FloatArray>)[0]
                 l2Normalize(output)
