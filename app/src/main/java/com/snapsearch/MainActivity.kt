@@ -37,6 +37,7 @@ import com.snapsearch.data.ObjectBoxStore
 import com.snapsearch.indexing.IndexingPipeline
 import com.snapsearch.ml.ClipEngine
 import com.snapsearch.ml.OcrEngine
+import com.snapsearch.ml.ZeroShotTagger
 import com.snapsearch.search.ScoreFusion
 import com.snapsearch.ui.theme.SnapSearchTheme
 import kotlinx.coroutines.Dispatchers
@@ -75,6 +76,7 @@ fun DebugScreen(modifier: Modifier = Modifier) {
     var indexingStatus by remember { mutableStateOf("Pick 10-20 real on-device images to index") }
     var searchQuery by remember { mutableStateOf("") }
     var searchStatus by remember { mutableStateOf("Index some images above, then search") }
+    var tagStatus by remember { mutableStateOf("Pick a real photo to test zero-shot tagging") }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -106,6 +108,17 @@ fun DebugScreen(modifier: Modifier = Modifier) {
             crossModalStatus = "Embedding image + candidate strings..."
             scope.launch {
                 crossModalStatus = runCrossModalSanityCheck(context, uri, customCandidate)
+            }
+        }
+    }
+
+    val tagImagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            tagStatus = "Tagging: ${uri.lastPathSegment}..."
+            scope.launch {
+                tagStatus = runZeroShotTag(context, uri)
             }
         }
     }
@@ -212,6 +225,17 @@ fun DebugScreen(modifier: Modifier = Modifier) {
             scope.launch { searchStatus = runSearch(context, searchQuery) }
         }) {
             Text("Search Indexed Images")
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+        // --- Zero-shot tagging section ---
+        Text("Phase 2 — Zero-shot tagging", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        Text(tagStatus, modifier = Modifier.fillMaxWidth())
+        Button(onClick = {
+            tagImagePickerLauncher.launch("image/*")
+        }) {
+            Text("Pick Real Photo to Tag")
         }
     }
 }
@@ -442,5 +466,39 @@ private suspend fun runSearch(context: android.content.Context, query: String): 
         }
     } catch (e: Exception) {
         "❌ Search FAIL: ${e.javaClass.simpleName}: ${e.message}"
+    }
+}
+
+// ---- Zero-shot tagging (Phase 2) ----
+
+private suspend fun runZeroShotTag(context: android.content.Context, uri: Uri): String {
+    return withContext(Dispatchers.Default) {
+        try {
+            val imageEmbedding = ClipEngine.embedImage(context, uri)
+
+            // First call also embeds the whole vocabulary (one-time, cached after) — timed
+            // separately from a second, cache-hit-only call to confirm tagging is "near-free"
+            // once that warm-up has happened, per the Phase 2 gate in the implementation plan.
+            val coldStartMs = System.currentTimeMillis()
+            val scored = ZeroShotTagger.classifyScored(context, imageEmbedding)
+            val coldElapsed = System.currentTimeMillis() - coldStartMs
+
+            val warmStartMs = System.currentTimeMillis()
+            ZeroShotTagger.classifyScored(context, imageEmbedding)
+            val warmElapsed = System.currentTimeMillis() - warmStartMs
+
+            val topTags = scored.take(ZeroShotTagger.TOP_K)
+
+            buildString {
+                appendLine("✅ Classified against ${ZeroShotTagger.vocabularySize()} labels")
+                appendLine("First call (vocab embed + classify): ${coldElapsed}ms")
+                appendLine("Second call (classify only, cached): ${warmElapsed}ms")
+                appendLine("captionText: \"${topTags.joinToString(" ") { it.first }}\"")
+                appendLine("--- Top ${ZeroShotTagger.TOP_K} tags ---")
+                topTags.forEach { (tag, score) -> appendLine("${"%.4f".format(score)}  $tag") }
+            }
+        } catch (e: Exception) {
+            "❌ Zero-shot tagging FAIL: ${e.javaClass.simpleName}: ${e.message}"
+        }
     }
 }
